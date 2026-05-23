@@ -19,6 +19,15 @@ import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
 
+# ─── Configuração da prancha (A1 paisagem) ───────────────────────────────────
+
+_PAPER_W_MM = 841
+_PAPER_H_MM = 594
+_MARGIN_MM  = 15
+_STRIP_FRAC = 0.08    # faixa de legenda como fração da altura total
+_STD_SCALES = [100, 200, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 5000, 10000]
+
+
 # ─── Transformação de coordenadas ────────────────────────────────────────────
 
 def _loc2glob(x_l, y_l, E0, N0, Az_rad, s):
@@ -83,6 +92,121 @@ def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
     cy = Nt + gap * dN
     text = msp.add_text(label, dxfattribs={'height': h, 'layer': layer, 'rotation': rot})
     text.set_placement((cx, cy), align=TextEntityAlignment.MIDDLE_CENTER)
+
+
+# ─── Prancha, Norte e Raio ────────────────────────────────────────────────────
+
+def _compute_layout(all_pts):
+    """
+    Calcula escala normalizada e dimensões da prancha A1 centrada no desenho.
+    Retorna (scale, frame_W, frame_H, strip_H, ox, oy) onde (ox, oy) é o canto
+    inferior-esquerdo da prancha em coordenadas modelo.
+    """
+    Es = [p[0] for p in all_pts]
+    Ns = [p[1] for p in all_pts]
+    cx = (min(Es) + max(Es)) / 2
+    cy = (min(Ns) + max(Ns)) / 2
+    span_E = max(Es) - min(Es)
+    span_N = max(Ns) - min(Ns)
+
+    avail_W_mm = _PAPER_W_MM - 2 * _MARGIN_MM
+    avail_H_mm = _PAPER_H_MM * (1 - _STRIP_FRAC) - 2 * _MARGIN_MM
+
+    scale_raw = max(span_E / (avail_W_mm / 1000),
+                    span_N / (avail_H_mm / 1000))
+    scale = next((s for s in _STD_SCALES if s >= scale_raw * 1.15), _STD_SCALES[-1])
+
+    frame_W = _PAPER_W_MM / 1000 * scale
+    frame_H = _PAPER_H_MM / 1000 * scale
+    strip_H = frame_H * _STRIP_FRAC
+
+    # Centraliza o conteúdo na área útil acima da faixa de legenda
+    content_cy_offset = strip_H + (frame_H - strip_H) / 2
+    ox = cx - frame_W / 2
+    oy = cy - content_cy_offset
+
+    return scale, frame_W, frame_H, strip_H, ox, oy
+
+
+def _draw_frame(msp, ox, oy, W, H, strip_H, scale, layer='PRANCHA'):
+    """Borda da prancha A1 + faixa de legenda na base com título e escala."""
+    # Borda externa
+    msp.add_lwpolyline(
+        [(ox, oy), (ox + W, oy), (ox + W, oy + H), (ox, oy + H)],
+        close=True, dxfattribs={'layer': layer},
+    )
+    # Separador da legenda
+    msp.add_line((ox, oy + strip_H), (ox + W, oy + strip_H),
+                 dxfattribs={'layer': layer})
+
+    h = strip_H * 0.28
+    cy_leg = oy + strip_H * 0.50
+
+    t1 = msp.add_text(
+        'Espiral de Transição — Clotóide',
+        dxfattribs={'height': h, 'layer': layer},
+    )
+    t1.set_placement((ox + W * 0.50, cy_leg), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    t2 = msp.add_text(
+        f'Escala  1:{scale}',
+        dxfattribs={'height': h, 'layer': layer},
+    )
+    t2.set_placement((ox + W * 0.07, cy_leg), align=TextEntityAlignment.MIDDLE_LEFT)
+
+
+def _draw_north_arrow(msp, x, y, size, layer='NORTE'):
+    """
+    Seta Norte centrada em (x, y), apontando para o Norte geográfico (+N no DXF).
+    Composta por haste, triângulo e letra N.
+    """
+    hw       = size * 0.22
+    shaft_b  = y - size * 0.40
+    arr_base = y + size * 0.05
+    arr_tip  = y + size * 0.42
+
+    # Haste
+    msp.add_line((x, shaft_b), (x, arr_base), dxfattribs={'layer': layer})
+    # Ponta triangular
+    msp.add_lwpolyline(
+        [(x, arr_tip), (x - hw, arr_base), (x + hw, arr_base)],
+        close=True, dxfattribs={'layer': layer},
+    )
+    # Círculo na base
+    msp.add_circle((x, shaft_b), radius=size * 0.08, dxfattribs={'layer': layer})
+    # Letra N
+    h_n = size * 0.30
+    t = msp.add_text('N', dxfattribs={'height': h_n, 'layer': layer})
+    t.set_placement((x, arr_tip + h_n * 0.85), align=TextEntityAlignment.MIDDLE_CENTER)
+
+
+def _draw_radius_line(msp, E_ctr, N_ctr, E_SC, N_SC, R, layer='RAIO'):
+    """
+    Segmento de reta do centro do arco até SC (comprimento = R exato)
+    com rótulo 'R = XXX,XX m' deslocado perpendicularmente ao segmento.
+    """
+    dx = E_SC - E_ctr
+    dy = N_SC - N_ctr
+    dist = math.hypot(dx, dy)
+    ux, uy = dx / dist, dy / dist
+
+    msp.add_line((E_ctr, N_ctr), (E_SC, N_SC), dxfattribs={'layer': layer})
+
+    # Ponto médio + deslocamento perpendicular
+    mx, my = E_ctr + ux * dist * 0.5, N_ctr + uy * dist * 0.5
+    px, py = -uy, ux   # perpendicular unitário
+
+    rot = math.degrees(math.atan2(uy, ux))
+    if rot >  90: rot -= 180
+    if rot < -90: rot += 180
+
+    h = R * 0.018
+    label = f'R = {R:.2f} m'.replace('.', ',')
+    t = msp.add_text(label, dxfattribs={'height': h, 'layer': layer, 'rotation': rot})
+    t.set_placement(
+        (mx + px * h * 1.8, my + py * h * 1.8),
+        align=TextEntityAlignment.MIDDLE_CENTER,
+    )
 
 
 # ─── Cálculo dos pontos globais da curva completa ────────────────────────────
@@ -183,7 +307,7 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     direction     : 'E' (esquerda) | 'D' (direita)
     estaqueamento : dict — saída de estaqueamento_pontos() (opcional)
                     Quando fornecido, insere linhas de chamada perpendiculares
-                    com rótulos "Est.726+11,53" em TS, SC, CS e ST.
+                    com rótulos "E726+11,53" em TS, SC, CS e ST.
     n_pts         : pontos por segmento da curva
 
     Layers no DXF
@@ -195,6 +319,9 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     PONTOS         — amarelo  — marcadores dos pontos notáveis
     COTAS          — branco   — rótulos de nome (TS, SC, CS, ST, PI)
     ESTAQUEAMENTO  — ciano    — linhas de chamada e rótulos de estaca
+    RAIO           — magenta  — segmento centro→SC com valor do raio
+    NORTE          — branco   — seta Norte Verdadeiro
+    PRANCHA        — cinza    — borda da prancha A1 e legenda
     """
     s     = 1 if direction == 'E' else -1
     Az_in = math.radians(Az_in_deg)
@@ -212,7 +339,7 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     )
 
     # ── Criar documento DXF ──────────────────────────────────────────────────
-    doc = ezdxf.new('R2010', setup=True)   # carrega linetypes padrão (DASHED, etc.)
+    doc = ezdxf.new('R2010', setup=True)
     msp = doc.modelspace()
 
     for nome, cor in [
@@ -223,6 +350,9 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
         ('PONTOS',        2),   # amarelo
         ('COTAS',         7),   # branco / preto
         ('ESTAQUEAMENTO', 4),   # ciano
+        ('RAIO',          6),   # magenta
+        ('NORTE',         7),   # branco
+        ('PRANCHA',       8),   # cinza
     ]:
         doc.layers.add(nome, color=cor)
 
@@ -250,8 +380,8 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     msp.add_lwpolyline(spiral2, dxfattribs={'layer': 'ESPIRAL_2'})
 
     # ── Marcadores e rótulos ─────────────────────────────────────────────────
-    h      = R * 0.012          # altura de texto proporcional ao raio
-    r_mark = R * 0.004          # raio do círculo marcador
+    h      = R * 0.012
+    r_mark = R * 0.004
 
     for nome, (E, N) in pontos.items():
         if nome == 'Centro':
@@ -267,7 +397,6 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
         Phi_rad = elem['Phi_rad']
         AC_rad  = math.radians(AC_deg)
 
-        # Azimute da tangente em cada ponto notável
         az_pts = {
             'TS': Az_in,
             'SC': Az_in - s * Phi_rad,
@@ -275,8 +404,8 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
             'ST': Az_out,
         }
 
-        tick_len = R * 0.06     # comprimento da linha de chamada
-        h_stake  = R * 0.008    # altura do texto de estaca
+        tick_len = R * 0.06
+        h_stake  = R * 0.008
 
         for nome in ('TS', 'SC', 'CS', 'ST'):
             E, N = pontos[nome]
@@ -290,6 +419,22 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
                 tick_len=tick_len,
                 layer='ESTAQUEAMENTO',
             )
+
+    # ── Raio: segmento centro → SC ───────────────────────────────────────────
+    E_SC, N_SC   = pontos['SC']
+    E_ctr, N_ctr = pontos['Centro']
+    _draw_radius_line(msp, E_ctr, N_ctr, E_SC, N_SC, R)
+
+    # ── Prancha A1 com escala dinâmica ───────────────────────────────────────
+    all_pts = spiral1 + arc_pts + spiral2 + list(pontos.values())
+    scale, frame_W, frame_H, strip_H, ox, oy = _compute_layout(all_pts)
+    _draw_frame(msp, ox, oy, frame_W, frame_H, strip_H, scale)
+
+    # ── Seta Norte: canto superior direito da área de desenho ─────────────────
+    na_size = frame_H * 0.055
+    na_x = ox + frame_W - na_size * 2.5
+    na_y = oy + strip_H + (frame_H - strip_H) * 0.88
+    _draw_north_arrow(msp, na_x, na_y, na_size)
 
     # ── Serializar para bytes ────────────────────────────────────────────────
     buf = io.StringIO()
