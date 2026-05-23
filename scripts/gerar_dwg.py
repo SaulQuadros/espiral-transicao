@@ -16,6 +16,7 @@ Transformação local → global (E, N):
 import math
 import io
 import ezdxf
+from ezdxf.enums import TextEntityAlignment
 
 
 # ─── Transformação de coordenadas ────────────────────────────────────────────
@@ -54,7 +55,11 @@ def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
         dE = -s · cos(Az)
         dN =  s · sin(Az)
 
-    O texto é rotacionado paralelo à linha de chamada (perpendicular ao eixo).
+    Alinhamento MIDDLE_CENTER: ponto de inserção é o centro do texto,
+    então a normalização da rotação ±180° não causa sobreposição com a curva.
+    O centro é posicionado `gap = h * 4.5` além do fim do segmento de chamada,
+    garantindo ≈ 1.5h de folga entre o segmento e a borda mais próxima do texto
+    (estimativa: ~10 chars × 0.6h/char → meia-largura ≈ 3h).
     """
     # Vetor inward unitário
     dE = -s * math.cos(Az_tang_rad)
@@ -72,8 +77,12 @@ def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
     if rot < -90:
         rot += 180
 
+    # Centro do texto a gap além do fim do segmento
+    gap = h * 4.5
+    cx = Et + gap * dE
+    cy = Nt + gap * dN
     text = msp.add_text(label, dxfattribs={'height': h, 'layer': layer, 'rotation': rot})
-    text.dxf.insert = (Et + h * 0.4 * dE, Nt + h * 0.4 * dN)
+    text.set_placement((cx, cy), align=TextEntityAlignment.MIDDLE_CENTER)
 
 
 # ─── Cálculo dos pontos globais da curva completa ────────────────────────────
@@ -267,7 +276,7 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
         }
 
         tick_len = R * 0.06     # comprimento da linha de chamada
-        h_stake  = R * 0.010    # altura do texto de estaca
+        h_stake  = R * 0.008    # altura do texto de estaca
 
         for nome in ('TS', 'SC', 'CS', 'ST'):
             E, N = pontos[nome]
