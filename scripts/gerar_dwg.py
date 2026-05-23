@@ -41,9 +41,9 @@ def _spiral_xy(l, R, le):
 # ─── Helpers de estaqueamento ────────────────────────────────────────────────
 
 def _stake_label(stake_int, stake_frac):
-    """Formata rótulo no padrão brasileiro: Est.726+11,53"""
+    """Formata rótulo no padrão brasileiro: E726+11,53"""
     frac = f"{stake_frac:.2f}".replace('.', ',')
-    return f"Est.{stake_int}+{frac}"
+    return f"E{stake_int}+{frac}"
 
 
 def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
@@ -54,19 +54,19 @@ def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
         dE = -s · cos(Az)
         dN =  s · sin(Az)
 
-    O texto é rotacionado paralelo ao eixo da via para leitura natural.
+    O texto é rotacionado paralelo à linha de chamada (perpendicular ao eixo).
     """
     # Vetor inward unitário
-    dE =  -s * math.cos(Az_tang_rad)
-    dN =   s * math.sin(Az_tang_rad)
+    dE = -s * math.cos(Az_tang_rad)
+    dN =  s * math.sin(Az_tang_rad)
 
     # Extremidade da linha de chamada
     Et = E + tick_len * dE
     Nt = N + tick_len * dN
     msp.add_line((E, N), (Et, Nt), dxfattribs={'layer': layer})
 
-    # Ângulo de rotação do texto = direção da tangente (paralela ao eixo da via)
-    rot = math.degrees(math.atan2(math.cos(Az_tang_rad), math.sin(Az_tang_rad)))
+    # Ângulo de rotação = direção do tick (paralelo à linha de chamada)
+    rot = math.degrees(math.atan2(dN, dE))
     if rot >  90:
         rot -= 180
     if rot < -90:
@@ -267,7 +267,7 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
         }
 
         tick_len = R * 0.06     # comprimento da linha de chamada
-        h_stake  = R * 0.016    # altura do texto de estaca
+        h_stake  = R * 0.010    # altura do texto de estaca
 
         for nome in ('TS', 'SC', 'CS', 'ST'):
             E, N = pontos[nome]
