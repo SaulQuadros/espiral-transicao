@@ -38,6 +38,44 @@ def _spiral_xy(l, R, le):
     return x, y
 
 
+# ─── Helpers de estaqueamento ────────────────────────────────────────────────
+
+def _stake_label(stake_int, stake_frac):
+    """Formata rótulo no padrão brasileiro: Est.726+11,53"""
+    frac = f"{stake_frac:.2f}".replace('.', ',')
+    return f"Est.{stake_int}+{frac}"
+
+
+def _add_stake_label(msp, E, N, Az_tang_rad, s, label, h, tick_len, layer):
+    """
+    Desenha linha de chamada perpendicular (para dentro da curva) e rótulo da estaca.
+
+    A direção inward (perpendicular ao eixo, voltada ao centro) é:
+        dE = -s · cos(Az)
+        dN =  s · sin(Az)
+
+    O texto é rotacionado paralelo ao eixo da via para leitura natural.
+    """
+    # Vetor inward unitário
+    dE =  -s * math.cos(Az_tang_rad)
+    dN =   s * math.sin(Az_tang_rad)
+
+    # Extremidade da linha de chamada
+    Et = E + tick_len * dE
+    Nt = N + tick_len * dN
+    msp.add_line((E, N), (Et, Nt), dxfattribs={'layer': layer})
+
+    # Ângulo de rotação do texto = direção da tangente (paralela ao eixo da via)
+    rot = math.degrees(math.atan2(math.cos(Az_tang_rad), math.sin(Az_tang_rad)))
+    if rot >  90:
+        rot -= 180
+    if rot < -90:
+        rot += 180
+
+    text = msp.add_text(label, dxfattribs={'height': h, 'layer': layer, 'rotation': rot})
+    text.dxf.insert = (Et + h * 0.4 * dE, Nt + h * 0.4 * dN)
+
+
 # ─── Cálculo dos pontos globais da curva completa ────────────────────────────
 
 def calcular_pontos_curva(elem, R, AC_deg, le, E_TS, N_TS, Az_in_deg, direction='E', n_pts=150):
@@ -119,30 +157,35 @@ def calcular_pontos_curva(elem, R, AC_deg, le, E_TS, N_TS, Az_in_deg, direction=
 # ─── Geração do arquivo DXF ──────────────────────────────────────────────────
 
 def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
-                    Az_in_deg, ref_point='TS', direction='E', n_pts=150):
+                    Az_in_deg, ref_point='TS', direction='E',
+                    estaqueamento=None, n_pts=150):
     """
     Gera a curva espiral completa em formato DXF e retorna os bytes prontos
     para download ou escrita em arquivo.
 
     Parâmetros
     ----------
-    elem        : dict — saída de elementos_espiral()
-    R, AC_deg   : raio (m) e ângulo central (graus)
-    le          : comprimento de transição adotado (m)
-    E_ref, N_ref: coordenadas do ponto de referência
-    Az_in_deg   : azimute da tangente de entrada (graus topográficos)
-    ref_point   : 'TS' | 'PI'
-    direction   : 'E' (esquerda) | 'D' (direita)
-    n_pts       : pontos por segmento da curva
+    elem          : dict — saída de elementos_espiral()
+    R, AC_deg     : raio (m) e ângulo central (graus)
+    le            : comprimento de transição adotado (m)
+    E_ref, N_ref  : coordenadas do ponto de referência
+    Az_in_deg     : azimute da tangente de entrada (graus topográficos)
+    ref_point     : 'TS' | 'PI'
+    direction     : 'E' (esquerda) | 'D' (direita)
+    estaqueamento : dict — saída de estaqueamento_pontos() (opcional)
+                    Quando fornecido, insere linhas de chamada perpendiculares
+                    com rótulos "Est.726+11,53" em TS, SC, CS e ST.
+    n_pts         : pontos por segmento da curva
 
     Layers no DXF
     -------------
-    TANGENTES  — cinza    — tangentes externas (linha tracejada)
-    ESPIRAL_1  — azul     — 1ª espiral (TS→SC)
-    CIRCULAR   — vermelho — arco circular (SC→CS)
-    ESPIRAL_2  — verde    — 2ª espiral (CS→ST)
-    PONTOS     — amarelo  — marcadores dos pontos notáveis
-    COTAS      — branco   — rótulos de texto
+    TANGENTES      — cinza    — tangentes externas (tracejado)
+    ESPIRAL_1      — azul     — 1ª espiral (TS→SC)
+    CIRCULAR       — vermelho — arco circular (SC→CS)
+    ESPIRAL_2      — verde    — 2ª espiral (CS→ST)
+    PONTOS         — amarelo  — marcadores dos pontos notáveis
+    COTAS          — branco   — rótulos de nome (TS, SC, CS, ST, PI)
+    ESTAQUEAMENTO  — ciano    — linhas de chamada e rótulos de estaca
     """
     s     = 1 if direction == 'E' else -1
     Az_in = math.radians(Az_in_deg)
@@ -164,12 +207,13 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     msp = doc.modelspace()
 
     for nome, cor in [
-        ('TANGENTES', 8),    # cinza
-        ('ESPIRAL_1', 5),    # azul
-        ('CIRCULAR',  1),    # vermelho
-        ('ESPIRAL_2', 3),    # verde
-        ('PONTOS',    2),    # amarelo
-        ('COTAS',     7),    # branco / preto
+        ('TANGENTES',     8),   # cinza
+        ('ESPIRAL_1',     5),   # azul
+        ('CIRCULAR',      1),   # vermelho
+        ('ESPIRAL_2',     3),   # verde
+        ('PONTOS',        2),   # amarelo
+        ('COTAS',         7),   # branco / preto
+        ('ESTAQUEAMENTO', 4),   # ciano
     ]:
         doc.layers.add(nome, color=cor)
 
@@ -208,6 +252,35 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
         msp.add_circle((E, N), radius=r_mark, dxfattribs={'layer': 'PONTOS'})
         text = msp.add_text(nome, dxfattribs={'height': h, 'layer': 'COTAS'})
         text.dxf.insert = (E + h * 0.7, N + h * 0.7)
+
+    # ── Estaqueamento: linhas de chamada perpendiculares + rótulos ──────────
+    if estaqueamento is not None:
+        Phi_rad = elem['Phi_rad']
+        AC_rad  = math.radians(AC_deg)
+
+        # Azimute da tangente em cada ponto notável
+        az_pts = {
+            'TS': Az_in,
+            'SC': Az_in - s * Phi_rad,
+            'CS': Az_in - s * (AC_rad - Phi_rad),
+            'ST': Az_out,
+        }
+
+        tick_len = R * 0.06     # comprimento da linha de chamada
+        h_stake  = R * 0.016    # altura do texto de estaca
+
+        for nome in ('TS', 'SC', 'CS', 'ST'):
+            E, N = pontos[nome]
+            si, sf = estaqueamento[nome][0], estaqueamento[nome][1]
+            _add_stake_label(
+                msp, E, N,
+                Az_tang_rad=az_pts[nome],
+                s=s,
+                label=_stake_label(si, sf),
+                h=h_stake,
+                tick_len=tick_len,
+                layer='ESTAQUEAMENTO',
+            )
 
     # ── Serializar para bytes ────────────────────────────────────────────────
     buf = io.StringIO()

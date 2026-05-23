@@ -19,7 +19,7 @@ _scripts = os.path.join(os.path.dirname(__file__), 'scripts')
 if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
-from calc_transicao import comprimentos_transicao, elementos_espiral
+from calc_transicao import comprimentos_transicao, elementos_espiral, estaqueamento_pontos
 from gerar_dwg import calcular_pontos_curva, gerar_dxf_bytes
 
 
@@ -38,13 +38,14 @@ st.markdown(
 st.divider()
 
 
-# ── Formulário de entrada ─────────────────────────────────────────────────────
+# ── Formulário único de entrada ───────────────────────────────────────────────
 with st.form("form_espiral"):
+
+    # ── Seção 1: parâmetros e posicionamento ─────────────────────────────────
     col_esp, col_pos = st.columns(2, gap="large")
 
     with col_esp:
         st.subheader("Parâmetros da espiral")
-
         v = st.number_input(
             "Velocidade **v** (km/h)",
             min_value=20.0, max_value=200.0, value=80.0, step=5.0,
@@ -71,7 +72,6 @@ with st.form("form_espiral"):
 
     with col_pos:
         st.subheader("Posicionamento global")
-
         ref_opt = st.radio(
             "Coordenadas referentes a:",
             options=["TS  (Tangente–Espiral)", "PI  (Vértice das tangentes)"],
@@ -85,13 +85,33 @@ with st.form("form_espiral"):
             "**N** — coordenada Norte (m)",
             value=0.0, format="%.3f", step=1.0,
         )
-
         st.markdown("**Azimute da tangente de entrada** (grau / minuto / segundo)")
         c1, c2, c3 = st.columns(3)
-        az_g = c1.number_input("Graus",  min_value=0,   max_value=359,  value=0,   step=1)
-        az_m = c2.number_input("Min",    min_value=0,   max_value=59,   value=0,   step=1)
-        az_s = c3.number_input("Seg",    min_value=0.0, max_value=59.99, value=0.0, step=1.0)
+        az_g = c1.number_input("Graus", min_value=0,   max_value=359,   value=0,   step=1)
+        az_m = c2.number_input("Min",   min_value=0,   max_value=59,    value=0,   step=1)
+        az_s = c3.number_input("Seg",   min_value=0.0, max_value=59.99, value=0.0, step=1.0)
         Az_deg = az_g + az_m / 60 + az_s / 3600
+
+    # ── Seção 2: estaqueamento (opcional) ────────────────────────────────────
+    st.divider()
+    st.subheader("Estaqueamento dos pontos notáveis (opcional)")
+    st.caption(
+        "Preencha os dados do PI para incluir no DXF as linhas de chamada "
+        "perpendiculares com rótulos Est.TS, Est.SC, Est.CS e Est.ST."
+    )
+
+    use_stake = st.checkbox("Incluir estaqueamento no DXF")
+    ce1, ce2, ce3 = st.columns(3)
+    PI_stake = ce1.number_input(
+        "Estaca do PI (inteiro)", min_value=0, value=740, step=1,
+    )
+    PI_frac = ce2.number_input(
+        "Fração do PI (m)", min_value=0.0, max_value=19.99,
+        value=7.80, format="%.2f", step=0.01,
+    )
+    spacing = ce3.number_input(
+        "Espaçamento entre estacas (m)", min_value=5.0, value=20.0, step=5.0,
+    )
 
     submitted = st.form_submit_button(
         "Calcular e gerar DXF",
@@ -123,11 +143,11 @@ if submitted:
         st.error(msg)
 
     if not erros:
-        # ── Calcular elementos geométricos ────────────────────────────────────
+        # ── Elementos geométricos ─────────────────────────────────────────────
         elem = elementos_espiral(v, R, AC, le)
 
-        s      = 1 if dir_code == 'E' else -1
-        Az_in  = math.radians(Az_deg)
+        s     = 1 if dir_code == 'E' else -1
+        Az_in = math.radians(Az_deg)
 
         if ref_code == 'PI':
             E_TS = E_ref - elem['TT'] * math.sin(Az_in)
@@ -139,21 +159,28 @@ if submitted:
             elem, R, AC, le, E_TS, N_TS, Az_deg, dir_code
         )
 
-        # ── Validação dos comprimentos ────────────────────────────────────────
+        # ── Estaqueamento ─────────────────────────────────────────────────────
+        estaq = None
+        if use_stake:
+            estaq = estaqueamento_pontos(
+                int(PI_stake), PI_frac, elem['TT'], le, elem['Dtheta'], int(spacing)
+            )
+
+        # ── Comprimentos de transição ─────────────────────────────────────────
         st.subheader("Comprimentos de transição")
         cv1, cv2, cv3, cv4 = st.columns(4)
         cv1.metric("le_mín (Barnett)", f"{comp['le_min']:.2f} m")
-        cv2.metric("le_des (Shortt)", f"{comp['le_des']:.2f} m")
-        cv3.metric("le_máx", f"{comp['le_max']:.2f} m")
-        ok_icon = "OK" if comp['le_min'] <= le <= comp['le_max'] else "FORA DO INTERVALO"
-        cv4.metric("le adotado", f"{le:.2f} m", delta=ok_icon)
+        cv2.metric("le_des (Shortt)",  f"{comp['le_des']:.2f} m")
+        cv3.metric("le_máx",           f"{comp['le_max']:.2f} m")
+        ok_str = "OK" if comp['le_min'] <= le <= comp['le_max'] else "FORA DO INTERVALO"
+        cv4.metric("le adotado", f"{le:.2f} m", delta=ok_str)
 
         # ── Elementos geométricos ─────────────────────────────────────────────
         st.subheader("Elementos geométricos")
         e1, e2, e3, e4 = st.columns(4)
-        e1.metric("Phi", elem['Phi_dms'])
-        e2.metric("TT",  f"{elem['TT']:.2f} m")
-        e3.metric("Es",  f"{elem['Es']:.2f} m")
+        e1.metric("Phi",    elem['Phi_dms'])
+        e2.metric("TT",     f"{elem['TT']:.2f} m")
+        e3.metric("Es",     f"{elem['Es']:.2f} m")
         e4.metric("Dtheta", f"{elem['Dtheta']:.2f} m")
 
         e5, e6, e7, e8 = st.columns(4)
@@ -162,27 +189,33 @@ if submitted:
         e7.metric("Xc", f"{elem['Xc']:.3f} m")
         e8.metric("Yc", f"{elem['Yc']:.3f} m")
 
-        # ── Coordenadas globais dos pontos notáveis ───────────────────────────
+        # ── Tabela de coordenadas + estacas ───────────────────────────────────
         st.subheader("Coordenadas globais dos pontos notáveis")
-        tab_data = {
-            nome: {"E (m)": f"{E:.3f}", "N (m)": f"{N:.3f}"}
-            for nome, (E, N) in pontos.items()
-            if nome != 'Centro'
-        }
+        tab_data = {}
+        for nome, (E, N) in pontos.items():
+            if nome == 'Centro':
+                continue
+            row = {"E (m)": f"{E:.3f}", "N (m)": f"{N:.3f}"}
+            if estaq and nome in estaq:
+                si, sf = estaq[nome][0], estaq[nome][1]
+                row["Estaca"] = f"{si}+{f'{sf:.2f}'.replace('.', ',')}"
+            tab_data[nome] = row
         st.table(tab_data)
 
         # ── Plot matplotlib ───────────────────────────────────────────────────
         st.subheader("Visualização")
-
         fig, ax = plt.subplots(figsize=(9, 9))
 
         s1E, s1N = zip(*spiral1)
         aE,  aN  = zip(*arc_pts)
         s2E, s2N = zip(*spiral2)
 
-        ax.plot(s1E, s1N, color='#1f77b4', lw=2.2, label=f'1ª Espiral (TS→SC,  le={le:.0f} m)')
-        ax.plot(aE,  aN,  color='#d62728', lw=2.2, label=f'Arco Circular (SC→CS, Dθ={elem["Dtheta"]:.2f} m)')
-        ax.plot(s2E, s2N, color='#2ca02c', lw=2.2, label=f'2ª Espiral (CS→ST,  le={le:.0f} m)')
+        ax.plot(s1E, s1N, color='#1f77b4', lw=2.2,
+                label=f'1ª Espiral (TS→SC,  le={le:.0f} m)')
+        ax.plot(aE,  aN,  color='#d62728', lw=2.2,
+                label=f'Arco Circular (SC→CS,  Dθ={elem["Dtheta"]:.2f} m)')
+        ax.plot(s2E, s2N, color='#2ca02c', lw=2.2,
+                label=f'2ª Espiral (CS→ST,  le={le:.0f} m)')
 
         # Tangentes externas
         Az_out = Az_in - s * math.radians(AC)
@@ -212,10 +245,14 @@ if submitted:
                 continue
             cor = cores_pt.get(nome, 'black')
             ax.plot(E, N, 'o', color=cor, ms=7, zorder=5)
+            lbl = nome
+            if estaq and nome in estaq:
+                si, sf = estaq[nome][0], estaq[nome][1]
+                lbl = f"{nome}\nEst.{si}+{f'{sf:.2f}'.replace('.', ',')}"
             ax.annotate(
-                nome, (E, N),
+                lbl, (E, N),
                 textcoords="offset points", xytext=(6, 6),
-                fontsize=9, fontweight='bold', color=cor,
+                fontsize=8, fontweight='bold', color=cor,
             )
 
         ax.set_aspect('equal')
@@ -224,8 +261,8 @@ if submitted:
         ax.set_ylabel('N (m)')
         ax.legend(loc='best', fontsize=9)
         ax.set_title(
-            f'Espiral de Transição — R = {R:.0f} m,  le = {le:.0f} m,  AC = {AC:.1f}°,  '
-            f'{"Esquerda" if dir_code == "E" else "Direita"}',
+            f'Espiral de Transição — R={R:.0f} m,  le={le:.0f} m,  '
+            f'AC={AC:.1f}°,  {"Esquerda" if dir_code == "E" else "Direita"}',
             fontsize=11,
         )
         fig.tight_layout()
@@ -236,7 +273,9 @@ if submitted:
         st.subheader("Arquivo DXF")
         try:
             dxf_bytes = gerar_dxf_bytes(
-                elem, R, AC, le, E_ref, N_ref, Az_deg, ref_code, dir_code
+                elem, R, AC, le, E_ref, N_ref, Az_deg,
+                ref_code, dir_code,
+                estaqueamento=estaq,
             )
             st.download_button(
                 label="Baixar DXF  (abrir no AutoCAD)",
@@ -245,11 +284,14 @@ if submitted:
                 mime="application/octet-stream",
                 use_container_width=True,
             )
-            st.caption(
-                "Layers no DXF: **TANGENTES** (cinza/tracejado) · "
+            layers = (
+                "**TANGENTES** (cinza/tracejado) · "
                 "**ESPIRAL_1** (azul) · **CIRCULAR** (vermelho) · "
-                "**ESPIRAL_2** (verde) · **PONTOS** (amarelo) · **COTAS** (branco)."
+                "**ESPIRAL_2** (verde) · **PONTOS** (amarelo) · **COTAS** (branco)"
             )
+            if estaq:
+                layers += " · **ESTAQUEAMENTO** (ciano)"
+            st.caption(f"Layers: {layers}.")
         except Exception as exc:
             st.error(f"Erro ao gerar DXF: {exc}")
             st.info("Verifique se a biblioteca `ezdxf` está instalada (`pip install ezdxf`).")
