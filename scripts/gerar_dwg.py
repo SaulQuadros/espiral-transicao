@@ -160,7 +160,7 @@ def gerar_dxf_bytes(elem, R, AC_deg, le, E_ref, N_ref,
     )
 
     # ── Criar documento DXF ──────────────────────────────────────────────────
-    doc = ezdxf.new('R2010')
+    doc = ezdxf.new('R2010', setup=True)   # carrega linetypes padrão (DASHED, etc.)
     msp = doc.modelspace()
 
     for nome, cor in [
